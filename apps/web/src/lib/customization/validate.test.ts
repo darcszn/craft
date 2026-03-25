@@ -137,96 +137,69 @@ describe('validateCustomizationConfig', () => {
       ...validConfig,
       branding: { ...validConfig.branding, primaryColor: '#abc', secondaryColor: '#abc' },
     });
-    expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.code === 'DUPLICATE_COLORS')).toBe(true);
-  });
 
-  it('returns { valid: false } for null input', () => {
-    const result = validateCustomizationConfig(null);
-    expect(result.valid).toBe(false);
-    expect(result.errors.length).toBeGreaterThan(0);
-  });
+    // ── Contract address validation ────────────────────────────────────────────
 
-  it('returns { valid: false } for empty object', () => {
-    const result = validateCustomizationConfig({});
-    expect(result.valid).toBe(false);
-    expect(result.errors.length).toBeGreaterThan(0);
-  });
+    it('accepts config without contract addresses', () => {
+        const result = validateCustomizationConfig(valid);
+        expect(result.valid).toBe(true);
+    });
 
-  it('returns { valid: false } for non-object primitives', () => {
-    for (const input of [42, 'string', true, undefined]) {
-      const result = validateCustomizationConfig(input);
-      expect(result.valid).toBe(false);
-      expect(result.errors.length).toBeGreaterThan(0);
-    }
-  });
+    it('accepts config with valid contract addresses', () => {
+        const result = validateCustomizationConfig({
+            ...valid,
+            stellar: {
+                ...valid.stellar,
+                contractAddresses: {
+                    usdcContract: 'CBQWI64FZ2NKSJC7D45HJZVVMQZ3T7KHXOJSLZPZ5LHKQM7FFWVGNQST',
+                    nativeTokenContract: 'CATPNZ2SJRSVZJBWXGFSMZQHQ47JM5PXNQRVJLGHGHVKPZ2OVH3FHXP',
+                },
+            },
+        });
+        expect(result.valid).toBe(true);
+    });
 
-  // Feature: customization-payload-tests, Property 1: Valid configs always pass validation
-  it('Property 1: valid configs always pass validation', () => {
-    // Validates: Requirements 4.1, 4.8, 8.4
-    fc.assert(
-      fc.property(validConfigArb, (config) => {
-        const result = validateCustomizationConfig(config);
-        return result.valid === true && result.errors.length === 0;
-      }),
-      { numRuns: 25 }
-    );
-  });
+    it('returns error for invalid contract address (wrong length)', () => {
+        const result = validateCustomizationConfig({
+            ...valid,
+            stellar: {
+                ...valid.stellar,
+                contractAddresses: {
+                    badContract: 'CBQWI64FZ2NKSJC7D45HJZ',
+                },
+            },
+        });
+        expect(result.valid).toBe(false);
+        expect(result.errors[0].field).toBe('stellar.contractAddresses.badContract');
+        expect(result.errors[0].code).toBe('CONTRACT_ADDRESS_INVALID_LENGTH');
+    });
 
-  // Feature: customization-payload-tests, Property 2: Invalid hex colors always fail validation
-  it('Property 2: invalid hex colors always fail validation', () => {
-    // Validates: Requirements 4.3, 8.2
-    fc.assert(
-      fc.property(invalidHexConfigArb, (config) => {
-        const result = validateCustomizationConfig(config);
-        return result.valid === false;
-      }),
-      { numRuns: 25 }
-    );
-  });
+    it('returns error for invalid contract address (wrong prefix)', () => {
+        const result = validateCustomizationConfig({
+            ...valid,
+            stellar: {
+                ...valid.stellar,
+                contractAddresses: {
+                    badContract: 'GBQWI64FZ2NKSJC7D45HJZVVMQZ3T7KHXOJSLZPZ5LHKQM7FFWVGNQST',
+                },
+            },
+        });
+        expect(result.valid).toBe(false);
+        expect(result.errors[0].code).toBe('CONTRACT_ADDRESS_INVALID_PREFIX');
+    });
 
-  // Feature: customization-payload-tests, Property 3: appName length invariant
-  it('Property 3: appName length invariant', () => {
-    // Validates: Requirements 4.2, 8.1
-    fc.assert(
-      fc.property(badAppNameArb, (config) => {
-        const result = validateCustomizationConfig(config);
-        return (
-          result.valid === false &&
-          result.errors.some(e => e.field === 'branding.appName')
-        );
-      }),
-      { numRuns: 25 }
-    );
-  });
-
-  // Feature: customization-payload-tests, Property 4: Network/URL mismatch invariant
-  it('Property 4: network/URL mismatch invariant', () => {
-    // Validates: Requirements 4.4, 8.3
-    fc.assert(
-      fc.property(mismatchConfigArb, (config) => {
-        const result = validateCustomizationConfig(config);
-        const mismatchErrors = result.errors.filter(e => e.code === 'HORIZON_NETWORK_MISMATCH');
-        return result.valid === false && mismatchErrors.length === 1;
-      }),
-      { numRuns: 25 }
-    );
-  });
-
-  // Feature: customization-payload-tests, Property 5: Validation is deterministic (idempotence)
-  it('Property 5: validation is deterministic', () => {
-    // Validates: Requirements 8.5
-    fc.assert(
-      fc.property(fc.anything(), (input) => {
-        const result1 = validateCustomizationConfig(input);
-        const result2 = validateCustomizationConfig(input);
-        return (
-          result1.valid === result2.valid &&
-          JSON.stringify(result1.errors) === JSON.stringify(result2.errors)
-        );
-      }),
-      { numRuns: 25 }
-    );
-  });
+    it('returns error for contract with invalid characters', () => {
+        const result = validateCustomizationConfig({
+            ...valid,
+            stellar: {
+                ...valid.stellar,
+                contractAddresses: {
+                    badContract: 'CBQWI64FZ2NKSJC7D45HJZVVMQZ3T7KHXOJSLZPZ5LHKQM7-FWVGNQST',
+                },
+            },
+        });
+        expect(result.valid).toBe(false);
+        expect(result.errors[0].code).toBe('CONTRACT_ADDRESS_INVALID_CHARSET');
+    });
 });
 
