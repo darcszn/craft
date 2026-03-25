@@ -1,79 +1,176 @@
-import type { CustomizationConfig, Template } from '@craft/types';
-import { normalizeDraftConfig } from './customization-draft.service';
-import { validateCustomizationConfig } from '@/lib/customization/validate';
+/**
+ * PreviewService
+ *
+ * Generates real-time previews of customised templates.
+ * All blockchain data is sourced exclusively from static mock fixtures —
+ * no Stellar network requests are ever made during preview rendering.
+ *
+ * Design spec: craft-platform, Properties 13 & 14
+ */
 
-export interface PreviewConfig {
-    templateId: string;
-    templateName: string;
-    previewImageUrl: string;
-    customization: CustomizationConfig;
-    enabledFeatures: string[];
-    disabledFeatures: string[];
-    isValid: boolean;
-    validationErrors: Array<{ field: string; message: string; code: string }>;
+import type { CustomizationConfig } from '@craft/types';
+import type { StellarMockData, MockTransaction } from '@craft/types';
+
+// ── Viewport definitions ──────────────────────────────────────────────────────
+
+export type ViewportClass = 'desktop' | 'tablet' | 'mobile';
+
+export interface ViewportDimensions {
+  width: number;
+  height: number;
 }
 
-export interface PreviewUpdateResult {
-    previous: CustomizationConfig;
-    updated: CustomizationConfig;
-    changedFields: string[];
-    isValid: boolean;
-    validationErrors: Array<{ field: string; message: string; code: string }>;
+export const VIEWPORT_DIMENSIONS: Record<ViewportClass, ViewportDimensions> = {
+  desktop: { width: 1440, height: 900 },
+  tablet: { width: 768, height: 1024 },
+  mobile: { width: 375, height: 812 },
+};
+
+export const VIEWPORT_CLASSES: ViewportClass[] = [
+  'desktop',
+  'tablet',
+  'mobile',
+];
+
+// ── Preview data types ────────────────────────────────────────────────────────
+
+export interface PreviewData {
+  /** Inline CSS derived from the customisation config. */
+  css: string;
+  /** Viewport metadata for the rendered frame. */
+  viewport: ViewportDimensions;
+  /** All blockchain data — always sourced from mocks, never the network. */
+  mockData: StellarMockData;
+  /** Branding values applied to the preview. */
+  branding: {
+    appName: string;
+    primaryColor: string;
+    secondaryColor: string;
+    fontFamily: string;
+    logoUrl?: string;
+  };
+  /** Feature flags reflected in the preview. */
+  features: {
+    enableCharts: boolean;
+    enableTransactionHistory: boolean;
+    enableAnalytics: boolean;
+    enableNotifications: boolean;
+  };
 }
+
+export interface LayoutMetadata {
+  viewport: ViewportDimensions;
+  viewportClass: ViewportClass;
+  /** CSS max-width breakpoint applied at this viewport. */
+  containerMaxWidth: number;
+  /** Whether the sidebar is collapsed at this viewport. */
+  sidebarCollapsed: boolean;
+  /** Number of grid columns at this viewport. */
+  gridColumns: number;
+}
+
+// ── Static mock data (never fetched from the network) ────────────────────────
+
+const MOCK_ASSET = { code: 'XLM', issuer: '', type: 'native' as const };
+
+const MOCK_TRANSACTIONS: MockTransaction[] = [
+  {
+    id: 'tx-001',
+    type: 'payment',
+    amount: '100.00',
+    asset: MOCK_ASSET,
+    timestamp: new Date('2024-01-15T10:00:00Z'),
+  },
+  {
+    id: 'tx-002',
+    type: 'swap',
+    amount: '50.00',
+    asset: MOCK_ASSET,
+    timestamp: new Date('2024-01-14T09:00:00Z'),
+  },
+  {
+    id: 'tx-003',
+    type: 'payment',
+    amount: '200.00',
+    asset: MOCK_ASSET,
+    timestamp: new Date('2024-01-13T08:00:00Z'),
+  },
+];
+
+export const STATIC_MOCK_DATA: StellarMockData = {
+  accountBalance: '1000.00',
+  recentTransactions: MOCK_TRANSACTIONS,
+  assetPrices: { XLM: 0.12, USDC: 1.0 },
+};
+
+// ── Layout metadata derivation ────────────────────────────────────────────────
 
 /**
- * Derive the default CustomizationConfig from a template's customization schema.
- * Falls back to safe defaults for any missing schema fields.
+ * Derive layout metadata for a given viewport class.
+ * Pure function — deterministic for any given input.
  */
-export function buildDefaultConfigFromTemplate(template: Template): CustomizationConfig {
-    const schema = (template.customizationSchema ?? {}) as Record<string, any>;
-    const rawFeatures = (schema.features ?? {}) as Record<string, any>;
-    const featureDefaults: Record<string, boolean> = {};
+export function deriveLayoutMetadata(
+  viewportClass: ViewportClass
+): LayoutMetadata {
+  const viewport = VIEWPORT_DIMENSIONS[viewportClass];
 
-    for (const key of Object.keys(rawFeatures)) {
-        featureDefaults[key] = rawFeatures[key]?.default ?? false;
-    }
-
-    return normalizeDraftConfig({
-        features: {
-            enableCharts: featureDefaults['enableCharts'] ?? true,
-            enableTransactionHistory: featureDefaults['enableTransactionHistory'] ?? true,
-            enableAnalytics: featureDefaults['enableAnalytics'] ?? false,
-            enableNotifications: featureDefaults['enableNotifications'] ?? false,
-        },
-    });
+  switch (viewportClass) {
+    case 'desktop':
+      return {
+        viewport,
+        viewportClass,
+        containerMaxWidth: 1280,
+        sidebarCollapsed: false,
+        gridColumns: 12,
+      };
+    case 'tablet':
+      return {
+        viewport,
+        viewportClass,
+        containerMaxWidth: 720,
+        sidebarCollapsed: true,
+        gridColumns: 8,
+      };
+    case 'mobile':
+      return {
+        viewport,
+        viewportClass,
+        containerMaxWidth: 360,
+        sidebarCollapsed: true,
+        gridColumns: 4,
+      };
+  }
 }
+
+// ── CSS generation ────────────────────────────────────────────────────────────
 
 /**
- * Collect the flat dot-notation paths that differ between two configs.
- * Only inspects the three top-level sections: branding, features, stellar.
+ * Generate preview CSS from a customisation config.
+ * Pure function — same config always produces the same CSS string.
  */
-export function diffConfigs(
-    previous: CustomizationConfig,
-    updated: CustomizationConfig
-): string[] {
-    const changed: string[] = [];
-
-    const sections = ['branding', 'features', 'stellar'] as const;
-    for (const section of sections) {
-        const prev = previous[section] as unknown as Record<string, unknown>;
-        const next = updated[section] as unknown as Record<string, unknown>;
-        const seen: Record<string, true> = {};
-        const keys: string[] = [];
-        for (const k of [...Object.keys(prev), ...Object.keys(next)]) {
-            if (!seen[k]) { seen[k] = true; keys.push(k); }
-        }
-        for (const key of keys) {
-            if (JSON.stringify(prev[key]) !== JSON.stringify(next[key])) {
-                changed.push(`${section}.${key}`);
-            }
-        }
-    }
-
-    return changed;
+export function generatePreviewCss(config: CustomizationConfig): string {
+  const { primaryColor, secondaryColor, fontFamily } = config.branding;
+  return [
+    `:root {`,
+    `  --color-primary: ${primaryColor};`,
+    `  --color-secondary: ${secondaryColor};`,
+    `  --font-family: ${fontFamily}, sans-serif;`,
+    `}`,
+  ].join('\n');
 }
+
+// ── PreviewService ────────────────────────────────────────────────────────────
 
 export class PreviewService {
+    private templateCategory?: TemplateCategory;
+
+    /**
+     * Set template category for context-specific mock data generation.
+     */
+    setTemplateCategory(category?: TemplateCategory): void {
+        this.templateCategory = category;
+    }
+
     /**
      * Generate a full preview config for a template, optionally overlaying a
      * saved customization. No network access is required — all data is passed in.
@@ -105,17 +202,98 @@ export class PreviewService {
                 disabledFeatures.push(key);
             }
         }
+      }
+    }
 
-        return {
-            templateId: template.id,
-            templateName: template.name,
-            previewImageUrl: template.previewImageUrl,
-            customization: merged,
-            enabledFeatures,
-            disabledFeatures,
-            isValid: validation.valid,
-            validationErrors: validation.errors,
+    /**
+     * Update preview with partial customization changes.
+     * Detects changed fields and only regenerates mock data if network config changed.
+     * Returns minimal update payload for efficient iframe updates.
+     */
+    updatePreview(
+        currentCustomization: CustomizationConfig,
+        changes: DeepPartial<CustomizationConfig>
+    ): { customization: CustomizationConfig; mockData?: StellarMockData; changedFields: string[]; timestamp: string } {
+        const updatedCustomization = this.mergeCustomization(currentCustomization, changes);
+        const changedFields = this.detectChangedFields(currentCustomization, changes);
+        const requiresMockDataRefresh = this.requiresMockDataRefresh(changedFields);
+
+        const payload: any = {
+            customization: updatedCustomization,
+            changedFields,
+            timestamp: new Date().toISOString(),
         };
+
+        if (requiresMockDataRefresh) {
+            payload.mockData = this.generateMockData(updatedCustomization);
+        }
+
+        return payload;
+    }
+
+    /**
+     * Deep merge partial changes into current customization.
+     */
+    private mergeCustomization(
+        current: CustomizationConfig,
+        changes: DeepPartial<CustomizationConfig>
+    ): CustomizationConfig {
+        return {
+            branding: { ...current.branding, ...(changes.branding ?? {}) },
+            features: { ...current.features, ...(changes.features ?? {}) },
+            stellar: { ...current.stellar, ...(changes.stellar ?? {}) },
+        };
+    }
+
+    /**
+     * Detect which fields changed by comparing current and changes.
+     * Returns array of dot-notation field paths (e.g., "branding.appName").
+     */
+    private detectChangedFields(
+        current: CustomizationConfig,
+        changes: DeepPartial<CustomizationConfig>
+    ): string[] {
+        const fields: string[] = [];
+
+        if (changes.branding) {
+            Object.keys(changes.branding).forEach((key) => {
+                const currentVal = (current.branding as any)[key];
+                const changeVal = (changes.branding as any)[key];
+                if (currentVal !== changeVal) {
+                    fields.push(`branding.${key}`);
+                }
+            });
+        }
+
+        if (changes.features) {
+            Object.keys(changes.features).forEach((key) => {
+                const currentVal = (current.features as any)[key];
+                const changeVal = (changes.features as any)[key];
+                if (currentVal !== changeVal) {
+                    fields.push(`features.${key}`);
+                }
+            });
+        }
+
+        if (changes.stellar) {
+            Object.keys(changes.stellar).forEach((key) => {
+                const currentVal = (current.stellar as any)[key];
+                const changeVal = (changes.stellar as any)[key];
+                if (currentVal !== changeVal) {
+                    fields.push(`stellar.${key}`);
+                }
+            });
+        }
+
+        return fields;
+    }
+
+    /**
+     * Determine if mock data needs to be regenerated.
+     * Only network changes require mock data refresh.
+     */
+    private requiresMockDataRefresh(changedFields: string[]): boolean {
+        return changedFields.some((field) => field.startsWith('stellar.network'));
     }
 
     /**
